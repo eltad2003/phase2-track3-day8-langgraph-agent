@@ -71,8 +71,15 @@
   - Tạo detailed proposed action với evidence:
     - Scenario ID
     - Risk level
+
+    # Hướng dẫn Chạy Phase 4 Extensions
+
+    ## Chạy Lab
+
     - Query context
-    - Mitigation strategy
+
+    ## Hướng dẫn Chạy Phase 4 Extensions
+
   - Chuẩn bị cho approval step
 
 ---
@@ -128,8 +135,6 @@
   - Ghi nhận: query, route, errors, events, timestamps
   - Hỗ trợ post-mortem analysis
 
----
-
 ## 12. Enhanced CLI với Dead-Letter Integration
 
 - **File:** `src/langgraph_agent_lab/cli.py`
@@ -155,7 +160,6 @@
     - Failure Modes & Mitigation table
     - Improvement Plan (LLM-as-judge, circuit breaker, etc.)
     - Implementation Checklist (15+ items)
-  - Giúp sinh viên hiểu design decisions
 
 ---
 
@@ -175,6 +179,8 @@ tests\test_state.py ..                                                   [100%]
 
 ---
 
+## Test Results (Core Implementation)
+
 ## Kiến trúc Cuối cùng
 
 ### State Schema
@@ -188,26 +194,19 @@ tests\test_state.py ..                                                   [100%]
 ```
 START → intake → classify → [route_after_classify]
                  ├→ answer → finalize → END
-                 ├→ tool → evaluate → [route_after_evaluate]
                  │         ├→ retry → [route_after_retry]
                  │         │   ├→ tool (loop)
                  │         │   └→ dead_letter → finalize → END
                  │         └→ answer → finalize → END
                  ├→ clarify → finalize → END
-                 ├→ risky_action → approval → [route_after_approval]
-                 │                 ├→ tool
                  │                 └→ clarify
                  └→ retry (from ERROR classification)
 ```
 
 ### Routing Policy
 
-| Query Type | Route | Action |
-|-----------|-------|--------|
 | Refund/Delete/Send | RISKY | Approval required |
-| Status/Order/Lookup | TOOL | Call external tool |
 | Incomplete query | MISSING_INFO | Ask clarification |
-| Timeout/Error keywords | ERROR | Trigger retry loop |
 | Safe questions | SIMPLE | Direct answer |
 
 ---
@@ -216,38 +215,29 @@ START → intake → classify → [route_after_classify]
 
 ✅ Input normalization + PII checks  
 ✅ Intelligent routing (5 routes + confidence)  
-✅ Idempotent tool execution  
 ✅ Structured tool results (SUCCESS/TRANSIENT_ERROR)  
 ✅ Rule-based evaluation + "done?" check  
 ✅ Bounded retry (max 3) with exponential backoff  
 ✅ Risk detection + approval workflow  
-✅ Rejection handling + clarification routing  
 ✅ Unknown route error handling  
 ✅ Dead-letter persistence + manual review  
 ✅ Append-only event audit trail  
-✅ Rich markdown reports  
-✅ CLI integration with dead-letter tracking  
 ✅ Checkpointer abstraction (memory/sqlite/postgres)  
 ✅ All tests passing (11/11)  
-
----
 
 ## Chạy Lab
 
 ```bash
 # Cài đặt dependencies
 pip install -e .
-
 # Chạy tests
 pytest -v
 
 # Chạy scenarios (nếu có data/sample/scenarios.jsonl)
-python -m langgraph_agent_lab.cli run-scenarios \
   --config configs/lab.yaml \
   --output outputs/metrics.json
 
 # Xem report
-cat outputs/lab_report.md
 ```
 
 ---
@@ -255,15 +245,9 @@ cat outputs/lab_report.md
 ## Tiếp theo (Optional - Extension)
 
 1. **LLM-as-Judge:** Replace rule-based evaluation với semantic validation (gọi LLM)
-2. **Advanced Retry:** Circuit breaker, jitter, cascading failure handling
-3. **Database Persistence:** Migrate dead-letters vào SQLite/Postgres
-4. **Observability:** OpenTelemetry tracing cho production debugging
-5. **Cost Optimization:** Fast-path shortcuts, fallback strategies
-
----
-
-**Status:** ✅ **IMPLEMENTATION COMPLETE** — Ready for grading & demo
-
+2. **Database Persistence:** Migrate dead-letters vào SQLite/Postgres
+3. **Observability:** OpenTelemetry tracing cho production debugging
+4. **Cost Optimization:** Fast-path shortcuts, fallback strategies
 
 ## Cách chạy bài lab
 
@@ -271,7 +255,6 @@ Chạy theo thứ tự này để kiểm tra nhanh toàn bộ pipeline:
 
 ```bash
 make install
-make test
 make run-scenarios
 make grade-local
 ```
@@ -284,6 +267,7 @@ python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics.jso
 ```
 
 Kết quả chính sẽ nằm ở:
+
 - `outputs/metrics.json`
 - `reports/lab_report.md`
 - `outputs/dead_letters/` nếu có scenario vượt retry
