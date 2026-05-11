@@ -72,15 +72,83 @@
     - Scenario ID
     - Risk level
 
-    # Hướng dẫn Chạy Phase 4 Extensions
+# Hướng dẫn Chạy Phase 4 Extensions
 
-    ## Chạy Lab
+## Chạy Lab (Phase 4 quickstart)
 
-    - Query context
+Sử dụng các lệnh sau để chạy demo Phase 4 (HITL, Streamlit UI, Time Travel, Graph export).
 
-    ## Hướng dẫn Chạy Phase 4 Extensions
+1) Real HITL Workflow (3-terminal setup)
 
-  - Chuẩn bị cho approval step
+Terminal 1 — Run graph with HITL enabled (pauses at approval_node):
+
+```powershell
+setx LANGGRAPH_INTERRUPT true
+python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics.json
+```
+
+Terminal 2 — Launch Streamlit UI (approval interface):
+
+```powershell
+python -m langgraph_agent_lab.cli ui-server --port 8501
+# Open http://localhost:8501 in a browser and approve/reject
+```
+
+Terminal 3 — Browser: interact with UI to approve/reject paused executions.
+
+1) Streamlit Approval UI (demo mode)
+
+```powershell
+python -m langgraph_agent_lab.cli ui-server --port 8501
+# Default demo mode shows mock risky actions (S04_risky). Approve/Reject to see payload.
+```
+
+1) Time Travel Replay (post-mortem)
+
+```powershell
+# Get thread_id from metrics
+jq -r '.scenario_metrics[0].thread_id' outputs/metrics.json
+
+python -m langgraph_agent_lab.cli replay-history --thread-id <THREAD_ID> --checkpoint-db checkpoints.db --output outputs/replay_history.md
+
+cat outputs/replay_history.md
+```
+
+1) Graph Diagram Export
+
+```powershell
+python -m langgraph_agent_lab.cli draw-graph --output outputs/graph_diagram.md
+cat outputs/graph_diagram.md
+```
+
+1) Quick verification commands
+
+```powershell
+python -m pytest tests/ -v               # Expect: 18 passed (11 original + 7 HITL)
+python -m langgraph_agent_lab.cli --help # Expect: commands: run-scenarios, validate-metrics, draw-graph, ui-server, replay-history
+```
+
+1) Full demo script (optional)
+
+```powershell
+pip install -e '.[dev,ui]'
+
+# Generate diagram
+python -m langgraph_agent_lab.cli draw-graph
+
+# Run scenarios (with HITL disabled by default)
+python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics.json
+
+# Validate metrics
+python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics.json
+
+# Replay history (if available)
+# THREAD_ID=$(jq -r '.scenario_metrics[0].thread_id' outputs/metrics.json)
+python -m langgraph_agent_lab.cli replay-history --thread-id <THREAD_ID> --checkpoint-db checkpoints.db --output outputs/replay_demo.md
+
+# Open reports
+type reports\lab_report.md | more
+```
 
 ---
 
