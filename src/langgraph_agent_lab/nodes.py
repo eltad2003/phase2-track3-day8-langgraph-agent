@@ -15,37 +15,59 @@ def intake_node(state: AgentState) -> dict:
     TODO(student): add normalization, PII checks, and metadata extraction.
     """
     query = state.get("query", "").strip()
+    normalized_query = " ".join(query.split())
+    # Placeholder for PII checking
+    has_pii = "ssn" in normalized_query.lower()
+    
     return {
-        "query": query,
-        "messages": [f"intake:{query[:40]}"],
-        "events": [make_event("intake", "completed", "query normalized")],
+        "query": normalized_query,
+        "messages": [f"intake:{normalized_query[:40]}"],
+        "events": [make_event("intake", "completed", f"query normalized, PII={has_pii}")],
     }
 
 
 def classify_node(state: AgentState) -> dict:
     """Classify the query into a route.
 
-    TODO(student): replace keyword heuristics with a clear routing policy.
-    Required routes: simple, tool, missing_info, risky, error.
+    Routing policy:
+    - RISKY: contains refund/delete/send (high risk)
+    - TOOL: contains status/order/lookup (requires external tool)
+    - MISSING_INFO: ambiguous pronouns or incomplete context
+    - ERROR: failure-related keywords (simulate transient error)
+    - SIMPLE: default safe route
     """
     query = state.get("query", "").lower()
     words = query.split()
     clean_words = [w.strip("?!.,;:") for w in words]
     route = Route.SIMPLE
     risk_level = "low"
-    if "refund" in query or "delete" in query or "send" in query:
+    confidence = 0.7  # Default confidence for simple route
+    
+    # High-risk actions require approval
+    if any(kw in query for kw in ["refund", "delete", "cancel", "send money"]):
         route = Route.RISKY
         risk_level = "high"
-    elif "status" in query or "order" in query or "lookup" in query:
+        confidence = 0.95
+    # Tool-dependent queries
+    elif any(kw in query for kw in ["status", "order", "lookup", "check"]):
         route = Route.TOOL
-    elif len(clean_words) < 5 and "it" in clean_words:
+        risk_level = "low"
+        confidence = 0.85
+    # Incomplete queries (missing required context)
+    elif len(clean_words) < 4 or (len(clean_words) < 5 and "it" in clean_words):
         route = Route.MISSING_INFO
-    elif "timeout" in query or "fail" in query:
+        risk_level = "low"
+        confidence = 0.6
+    # Error simulation for retry demonstrations
+    elif any(kw in query for kw in ["timeout", "fail", "error", "test error"]):
         route = Route.ERROR
+        risk_level = "medium"
+        confidence = 0.8
+    
     return {
         "route": route.value,
         "risk_level": risk_level,
-        "events": [make_event("classify", "completed", f"route={route.value}")],
+        "events": [make_event("classify", "completed", f"route={route.value}, confidence={confidence}")],
     }
 
 
@@ -63,40 +85,65 @@ def ask_clarification_node(state: AgentState) -> dict:
 
 
 def tool_node(state: AgentState) -> dict:
-    """Call a mock tool.
+    """Call a mock tool with idempotent execution and structured results.
 
     Simulates transient failures for error-route scenarios to demonstrate retry loops.
-    TODO(student): implement idempotent tool execution and structured tool results.
+    Uses status field to track execution state and avoid duplicate side effects.
     """
     attempt = int(state.get("attempt", 0))
+    scenario_id = state.get('scenario_id', 'unknown')
+    
+    # Idempotent: check if tool already executed successfully
+    tool_results = state.get("tool_results", [])
+    if tool_results and "SUCCESS" in tool_results[-1]:
+        return {
+            "tool_results": tool_results,  # Return existing result, no side effects
+            "events": [make_event("tool", "skipped", f"idempotent: already executed, attempt={attempt}")],
+        }
+    
+    # Simulate transient failures for error-route scenarios
     if state.get("route") == Route.ERROR.value and attempt < 2:
-        result = f"ERROR: transient failure attempt={attempt} scenario={state.get('scenario_id', 'unknown')}"
+        result = f"TRANSIENT_ERROR: scenario={scenario_id}, attempt={attempt}, retry_needed=true"
     else:
-        result = f"mock-tool-result for scenario={state.get('scenario_id', 'unknown')}"
+        result = f"SUCCESS: tool_execution_completed, scenario={scenario_id}, data_fetched=true"
+    
     return {
         "tool_results": [result],
-        "events": [make_event("tool", "completed", f"tool executed attempt={attempt}")],
+        "events": [make_event("tool", "completed", f"tool executed at attempt {attempt}")],
     }
 
 
 def risky_action_node(state: AgentState) -> dict:
-    """Prepare a risky action for approval.
+    """Prepare a risky action for approval with evidence and risk justification.
 
-    TODO(student): create a proposed action with evidence and risk justification.
+    High-risk routes (refund, delete, send) require human-in-the-loop approval.
+    Evidence includes query context, risk level, and proposed mitigation.
     """
+    query = state.get("query", "")
+    risk_level = state.get("risk_level", "unknown")
+    scenario_id = state.get("scenario_id", "unknown")
+    
+    # Construct a detailed proposed action with evidence
+    proposed_action = (
+        f"Scenario: {scenario_id}\n"
+        f"Risk Level: {risk_level}\n"
+        f"Query: {query}\n"
+        f"Action: Execute requested operation\n"
+        f"Mitigation: Reviewer confirmation required before proceeding."
+    )
+    
     return {
-        "proposed_action": "prepare refund or external action; approval required",
-        "events": [make_event("risky_action", "pending_approval", "approval required")],
+        "proposed_action": proposed_action,
+        "events": [make_event("risky_action", "pending_approval", f"risk_level={risk_level}, approval required")],
     }
 
 
 def approval_node(state: AgentState) -> dict:
-    """Human approval step with optional LangGraph interrupt().
+    """Human approval step with optional LangGraph interrupt() and rejection handling.
 
     Set LANGGRAPH_INTERRUPT=true to use real interrupt() for HITL demos.
     Default uses mock decision so tests and CI run offline.
-
-    TODO(student): implement reject/edit decisions and timeout escalation.
+    Supports approve/reject/edit outcomes; reject flows to clarification.
     """
     import os
 
@@ -112,10 +159,16 @@ def approval_node(state: AgentState) -> dict:
         else:
             decision = ApprovalDecision(approved=bool(value))
     else:
+        # Mock approval; in production, this would block until human review
         decision = ApprovalDecision(approved=True, comment="mock approval for lab")
+    
+    event_msg = f"approved={decision.approved}, reviewer={decision.reviewer}"
+    if not decision.approved:
+        event_msg += f", reason={decision.comment}"
+    
     return {
         "approval": decision.model_dump(),
-        "events": [make_event("approval", "completed", f"approved={decision.approved}")],
+        "events": [make_event("approval", "completed", event_msg)],
     }
 
 
@@ -125,11 +178,12 @@ def retry_or_fallback_node(state: AgentState) -> dict:
     TODO(student): implement bounded retry, exponential backoff metadata, and fallback route.
     """
     attempt = int(state.get("attempt", 0)) + 1
-    errors = [f"transient failure attempt={attempt}"]
+    wait_time_ms = (2 ** attempt) * 100  # Exponential backoff
+    errors = [f"transient failure attempt={attempt}, wait={wait_time_ms}ms"]
     return {
         "attempt": attempt,
         "errors": errors,
-        "events": [make_event("retry", "completed", "retry attempt recorded", attempt=attempt)],
+        "events": [make_event("retry", "completed", f"retry recorded, backoff {wait_time_ms}ms", attempt=attempt)],
     }
 
 
@@ -151,19 +205,37 @@ def answer_node(state: AgentState) -> dict:
 def evaluate_node(state: AgentState) -> dict:
     """Evaluate tool results — the 'done?' check that enables retry loops.
 
-    TODO(student): replace heuristic with LLM-as-judge or structured validation.
+    Validation rules:
+    - TRANSIENT_ERROR or ERROR: retry needed
+    - SUCCESS: evaluation passes
+    - Empty results: retry needed
+    Can be replaced with LLM-as-judge for semantic evaluation.
     """
     tool_results = state.get("tool_results", [])
     latest = tool_results[-1] if tool_results else ""
-    if "ERROR" in latest:
+    
+    # Rule-based evaluation
+    if not latest:
         return {
             "evaluation_result": "needs_retry",
-            "events": [make_event("evaluate", "completed", "tool result indicates failure, retry needed")],
+            "events": [make_event("evaluate", "completed", "no tool result, retry needed")],
         }
-    return {
-        "evaluation_result": "success",
-        "events": [make_event("evaluate", "completed", "tool result satisfactory")],
-    }
+    elif "TRANSIENT_ERROR" in latest or "ERROR" in latest:
+        return {
+            "evaluation_result": "needs_retry",
+            "events": [make_event("evaluate", "completed", "transient error detected, retry needed")],
+        }
+    elif "SUCCESS" in latest:
+        return {
+            "evaluation_result": "success",
+            "events": [make_event("evaluate", "completed", "tool result valid and complete")],
+        }
+    else:
+        # Ambiguous result: retry for safety
+        return {
+            "evaluation_result": "needs_retry",
+            "events": [make_event("evaluate", "completed", "ambiguous result, retry for validation")],
+        }
 
 
 def dead_letter_node(state: AgentState) -> dict:
