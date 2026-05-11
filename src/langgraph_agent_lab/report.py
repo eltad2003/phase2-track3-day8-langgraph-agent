@@ -87,3 +87,164 @@ def write_report(metrics: MetricsReport, output_path: str | Path) -> None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(render_report_stub(metrics), encoding="utf-8")
+
+
+def render_state_history(
+    thread_id: str,
+    history: list[dict],
+    scenario_id: str = "unknown",
+) -> str:
+    """Generate markdown report of state history for time-travel debugging.
+
+    Creates a timeline showing all checkpoint visits, node transitions, and
+    state changes for post-mortem analysis of graph execution.
+
+    Args:
+        thread_id: Thread identifier for execution
+        history: Checkpoint history from load_state_history()
+        scenario_id: Scenario identifier (optional, for context)
+
+    Returns:
+        Markdown-formatted state history timeline
+    """
+    from datetime import datetime
+
+    # Extract node path from history
+    nodes_path = _extract_node_path(history)
+
+    # Build timeline
+    timeline_lines = [
+        f"# State History Replay: {scenario_id}",
+        f"**Thread ID**: `{thread_id}`",
+        f"**Checkpoints**: {len(history)}",
+        f"**Node Path**: {' → '.join(nodes_path)}",
+        "",
+        "## Timeline",
+        "",
+    ]
+
+    for idx, record in enumerate(history, 1):
+        checkpoint_id = record.get("checkpoint_id", f"ckpt_{idx}")
+        metadata = record.get("metadata", {})
+        checkpoint = record.get("checkpoint", {})
+
+        # Extract state values
+        state_values = checkpoint.get(
+            "values", {}) if isinstance(checkpoint, dict) else {}
+
+        # Build checkpoint section
+        timeline_lines.append(f"### Checkpoint {idx}: {checkpoint_id}")
+        timeline_lines.append("")
+
+        # State snapshot
+        if state_values:
+            timeline_lines.append("**State Snapshot**:")
+            timeline_lines.append("```python")
+
+            # Show key fields
+            important_fields = [
+                "route",
+                "risk_level",
+                "attempt",
+                "approval",
+                "evaluation_result",
+            ]
+            for field in important_fields:
+                if field in state_values:
+                    value = state_values[field]
+                    timeline_lines.append(f"{field}: {repr(value)}")
+
+            timeline_lines.append("```")
+            timeline_lines.append("")
+
+        # Metadata
+        if metadata:
+            if "step" in metadata:
+                step_info = metadata["step"]
+                if isinstance(step_info, dict) and "node" in step_info:
+                    node_name = step_info["node"]
+                    timeline_lines.append(f"**Node**: `{node_name}`")
+
+            if "index" in metadata:
+                timeline_lines.append(f"**Step**: {metadata['index']}")
+
+        # Append-only fields summary
+        if "messages" in state_values:
+            msg_count = len(state_values["messages"]) if isinstance(
+                state_values["messages"], list) else 0
+            timeline_lines.append(f"**Messages**: {msg_count} events")
+
+        if "events" in state_values:
+            events = state_values["events"]
+            if isinstance(events, list) and events:
+                latest_event = events[-1]
+                if isinstance(latest_event, dict):
+                    event_msg = latest_event.get("message", "")
+                    timeline_lines.append(f"**Latest Event**: {event_msg}")
+
+        if "errors" in state_values:
+            err_count = len(state_values["errors"]) if isinstance(
+                state_values["errors"], list) else 0
+            if err_count > 0:
+                timeline_lines.append(f"⚠️ **Errors**: {err_count} recorded")
+
+        timeline_lines.append("")
+
+    # Summary section
+    timeline_lines.extend([
+        "---",
+        "",
+        "## Execution Summary",
+        "",
+        f"- **Total Checkpoints**: {len(history)}",
+        f"- **Node Sequence**: {' → '.join(nodes_path)}",
+        f"- **Length**: {len(nodes_path)} nodes visited",
+    ])
+
+    # Add routing decisions if detectable
+    if len(nodes_path) > 2:
+        timeline_lines.append(f"- **Key Decision Points**:")
+        for i, node in enumerate(nodes_path):
+            if node in ["classify", "evaluate", "approval", "route_after_retry"]:
+                next_node = nodes_path[i + 1] if i + \
+                    1 < len(nodes_path) else "END"
+                timeline_lines.append(f"  - {node} → {next_node}")
+
+    timeline_lines.extend([
+        "",
+        "---",
+        "",
+        "## How to Use This Report",
+        "",
+        "1. **Trace Execution**: Follow node sequence to understand decision path",
+        "2. **Debug Routing**: Check state values at each checkpoint to verify routing logic",
+        "3. **Verify Retries**: Count nodes to see if retry loop executed correctly",
+        "4. **Approval History**: Look for 'interrupt' event types in events list",
+        "5. **Error Recovery**: Inspect errors list to understand failure modes",
+        "",
+        "## See Also",
+        "",
+        "- [HITL Guide](../../docs/HITL_GUIDE.md) — Human approval debugging",
+        "- [EXTENSIONS.md](../../docs/EXTENSIONS.md) — Full extension architecture",
+    ])
+
+    return "\n".join(timeline_lines)
+
+
+def _extract_node_path(history: list[dict]) -> list[str]:
+    """Extract node visitation sequence from checkpoint history."""
+    from .persistence import get_checkpoint_nodes_path
+    return get_checkpoint_nodes_path(history)
+
+
+def write_state_history(
+    thread_id: str,
+    history: list[dict],
+    output_path: str | Path,
+    scenario_id: str = "unknown",
+) -> None:
+    """Write state history report to markdown file."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    content = render_state_history(thread_id, history, scenario_id)
+    path.write_text(content, encoding="utf-8")

@@ -71,9 +71,84 @@
   - Tạo detailed proposed action với evidence:
     - Scenario ID
     - Risk level
-    - Query context
-    - Mitigation strategy
-  - Chuẩn bị cho approval step
+
+# Hướng dẫn Chạy Phase 4 Extensions
+
+## Chạy Lab (Phase 4 quickstart)
+
+Sử dụng các lệnh sau để chạy demo Phase 4 (HITL, Streamlit UI, Time Travel, Graph export).
+
+1) Real HITL Workflow (3-terminal setup)
+
+Terminal 1 — Run graph with HITL enabled (pauses at approval_node):
+
+```powershell
+setx LANGGRAPH_INTERRUPT true
+python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics.json
+```
+
+Terminal 2 — Launch Streamlit UI (approval interface):
+
+```powershell
+python -m langgraph_agent_lab.cli ui-server --port 8501
+# Open http://localhost:8501 in a browser and approve/reject
+```
+
+Terminal 3 — Browser: interact with UI to approve/reject paused executions.
+
+1) Streamlit Approval UI (demo mode)
+
+```powershell
+python -m langgraph_agent_lab.cli ui-server --port 8501
+# Default demo mode shows mock risky actions (S04_risky). Approve/Reject to see payload.
+```
+
+1) Time Travel Replay (post-mortem)
+
+```powershell
+# Get thread_id from metrics
+jq -r '.scenario_metrics[0].thread_id' outputs/metrics.json
+
+python -m langgraph_agent_lab.cli replay-history --thread-id <THREAD_ID> --checkpoint-db checkpoints.db --output outputs/replay_history.md
+
+cat outputs/replay_history.md
+```
+
+1) Graph Diagram Export
+
+```powershell
+python -m langgraph_agent_lab.cli draw-graph --output outputs/graph_diagram.md
+cat outputs/graph_diagram.md
+```
+
+1) Quick verification commands
+
+```powershell
+python -m pytest tests/ -v               # Expect: 18 passed (11 original + 7 HITL)
+python -m langgraph_agent_lab.cli --help # Expect: commands: run-scenarios, validate-metrics, draw-graph, ui-server, replay-history
+```
+
+1) Full demo script (optional)
+
+```powershell
+pip install -e '.[dev,ui]'
+
+# Generate diagram
+python -m langgraph_agent_lab.cli draw-graph
+
+# Run scenarios (with HITL disabled by default)
+python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics.json
+
+# Validate metrics
+python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics.json
+
+# Replay history (if available)
+# THREAD_ID=$(jq -r '.scenario_metrics[0].thread_id' outputs/metrics.json)
+python -m langgraph_agent_lab.cli replay-history --thread-id <THREAD_ID> --checkpoint-db checkpoints.db --output outputs/replay_demo.md
+
+# Open reports
+type reports\lab_report.md | more
+```
 
 ---
 
@@ -128,8 +203,6 @@
   - Ghi nhận: query, route, errors, events, timestamps
   - Hỗ trợ post-mortem analysis
 
----
-
 ## 12. Enhanced CLI với Dead-Letter Integration
 
 - **File:** `src/langgraph_agent_lab/cli.py`
@@ -155,7 +228,6 @@
     - Failure Modes & Mitigation table
     - Improvement Plan (LLM-as-judge, circuit breaker, etc.)
     - Implementation Checklist (15+ items)
-  - Giúp sinh viên hiểu design decisions
 
 ---
 
@@ -175,6 +247,8 @@ tests\test_state.py ..                                                   [100%]
 
 ---
 
+## Test Results (Core Implementation)
+
 ## Kiến trúc Cuối cùng
 
 ### State Schema
@@ -188,26 +262,19 @@ tests\test_state.py ..                                                   [100%]
 ```
 START → intake → classify → [route_after_classify]
                  ├→ answer → finalize → END
-                 ├→ tool → evaluate → [route_after_evaluate]
                  │         ├→ retry → [route_after_retry]
                  │         │   ├→ tool (loop)
                  │         │   └→ dead_letter → finalize → END
                  │         └→ answer → finalize → END
                  ├→ clarify → finalize → END
-                 ├→ risky_action → approval → [route_after_approval]
-                 │                 ├→ tool
                  │                 └→ clarify
                  └→ retry (from ERROR classification)
 ```
 
 ### Routing Policy
 
-| Query Type | Route | Action |
-|-----------|-------|--------|
 | Refund/Delete/Send | RISKY | Approval required |
-| Status/Order/Lookup | TOOL | Call external tool |
 | Incomplete query | MISSING_INFO | Ask clarification |
-| Timeout/Error keywords | ERROR | Trigger retry loop |
 | Safe questions | SIMPLE | Direct answer |
 
 ---
@@ -216,38 +283,29 @@ START → intake → classify → [route_after_classify]
 
 ✅ Input normalization + PII checks  
 ✅ Intelligent routing (5 routes + confidence)  
-✅ Idempotent tool execution  
 ✅ Structured tool results (SUCCESS/TRANSIENT_ERROR)  
 ✅ Rule-based evaluation + "done?" check  
 ✅ Bounded retry (max 3) with exponential backoff  
 ✅ Risk detection + approval workflow  
-✅ Rejection handling + clarification routing  
 ✅ Unknown route error handling  
 ✅ Dead-letter persistence + manual review  
 ✅ Append-only event audit trail  
-✅ Rich markdown reports  
-✅ CLI integration with dead-letter tracking  
 ✅ Checkpointer abstraction (memory/sqlite/postgres)  
 ✅ All tests passing (11/11)  
-
----
 
 ## Chạy Lab
 
 ```bash
 # Cài đặt dependencies
 pip install -e .
-
 # Chạy tests
 pytest -v
 
 # Chạy scenarios (nếu có data/sample/scenarios.jsonl)
-python -m langgraph_agent_lab.cli run-scenarios \
   --config configs/lab.yaml \
   --output outputs/metrics.json
 
 # Xem report
-cat outputs/lab_report.md
 ```
 
 ---
@@ -255,15 +313,9 @@ cat outputs/lab_report.md
 ## Tiếp theo (Optional - Extension)
 
 1. **LLM-as-Judge:** Replace rule-based evaluation với semantic validation (gọi LLM)
-2. **Advanced Retry:** Circuit breaker, jitter, cascading failure handling
-3. **Database Persistence:** Migrate dead-letters vào SQLite/Postgres
-4. **Observability:** OpenTelemetry tracing cho production debugging
-5. **Cost Optimization:** Fast-path shortcuts, fallback strategies
-
----
-
-**Status:** ✅ **IMPLEMENTATION COMPLETE** — Ready for grading & demo
-
+2. **Database Persistence:** Migrate dead-letters vào SQLite/Postgres
+3. **Observability:** OpenTelemetry tracing cho production debugging
+4. **Cost Optimization:** Fast-path shortcuts, fallback strategies
 
 ## Cách chạy bài lab
 
@@ -271,7 +323,6 @@ Chạy theo thứ tự này để kiểm tra nhanh toàn bộ pipeline:
 
 ```bash
 make install
-make test
 make run-scenarios
 make grade-local
 ```
@@ -284,6 +335,7 @@ python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics.jso
 ```
 
 Kết quả chính sẽ nằm ở:
+
 - `outputs/metrics.json`
 - `reports/lab_report.md`
 - `outputs/dead_letters/` nếu có scenario vượt retry

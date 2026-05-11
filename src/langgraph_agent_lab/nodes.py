@@ -144,32 +144,56 @@ def approval_node(state: AgentState) -> dict:
     Set LANGGRAPH_INTERRUPT=true to use real interrupt() for HITL demos.
     Default uses mock decision so tests and CI run offline.
     Supports approve/reject/edit outcomes; reject flows to clarification.
+
+    Interrupt payload format:
+        {
+            "approved": bool,
+            "reviewer": str (optional, default "human-reviewer"),
+            "comment": str (optional, default "")
+        }
     """
     import os
 
-    if os.getenv("LANGGRAPH_INTERRUPT", "").lower() == "true":
-        from langgraph.types import interrupt
+    decision = None
+    interrupt_triggered = False
 
-        value = interrupt({
-            "proposed_action": state.get("proposed_action"),
-            "risk_level": state.get("risk_level"),
-        })
-        if isinstance(value, dict):
-            decision = ApprovalDecision(**value)
-        else:
-            decision = ApprovalDecision(approved=bool(value))
+    if os.getenv("LANGGRAPH_INTERRUPT", "").lower() == "true":
+        try:
+            from langgraph.types import interrupt
+
+            interrupt_triggered = True
+            value = interrupt({
+                "proposed_action": state.get("proposed_action"),
+                "risk_level": state.get("risk_level"),
+                "query": state.get("query", ""),
+            })
+
+            # Parse interrupt response
+            if isinstance(value, dict):
+                decision = ApprovalDecision(**value)
+            else:
+                decision = ApprovalDecision(approved=bool(value))
+
+        except Exception as e:  # Handle timeout, user cancel, etc.
+            # Fallback to rejection on interrupt error
+            decision = ApprovalDecision(
+                approved=False,
+                comment=f"Interrupt failed or canceled: {str(e)[:100]}")
+
     else:
         # Mock approval; in production, this would block until human review
         decision = ApprovalDecision(
             approved=True, comment="mock approval for lab")
 
+    # Build event message
+    event_type = "interrupt" if interrupt_triggered else "auto_approved"
     event_msg = f"approved={decision.approved}, reviewer={decision.reviewer}"
     if not decision.approved:
         event_msg += f", reason={decision.comment}"
 
     return {
         "approval": decision.model_dump(),
-        "events": [make_event("approval", "completed", event_msg)],
+        "events": [make_event("approval", event_type, event_msg)],
     }
 
 
