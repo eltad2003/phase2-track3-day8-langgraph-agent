@@ -35,11 +35,12 @@ def route_after_retry(state: AgentState) -> str:
     """
     attempt = int(state.get("attempt", 0))
     max_attempts = int(state.get("max_attempts", 3))
-    
+
     if attempt >= max_attempts:
-        print(f"[INFO] Max retry attempts ({max_attempts}) reached. Routing to dead_letter.")
+        print(
+            f"[INFO] Max retry attempts ({max_attempts}) reached. Routing to dead_letter.")
         return "dead_letter"
-    
+
     print(f"[INFO] Retry {attempt + 1}/{max_attempts}")
     return "tool"
 
@@ -70,9 +71,10 @@ def route_after_approval(state: AgentState) -> str:
     """
     approval = state.get("approval") or {}
     is_approved = approval.get("approved", False)
-    
+
     if is_approved:
-        print(f"[INFO] Action approved by {approval.get('reviewer', 'unknown')}. Proceeding to tool.")
+        print(
+            f"[INFO] Action approved by {approval.get('reviewer', 'unknown')}. Proceeding to tool.")
         return "tool"
     else:
         reason = approval.get("comment", "no reason provided")
