@@ -8,135 +8,77 @@ from .metrics import MetricsReport
 
 
 def render_report_stub(metrics: MetricsReport) -> str:
-    """Return a detailed lab report with metrics, recovery analysis, and recommendations.
+    """Return a report that follows the lab template exactly."""
+    scenario_rows = "\n".join(
+        f"| {item.scenario_id} | {item.expected_route} | {item.actual_route or ''} | {str(item.success).lower()} | {item.retry_count} | {item.interrupt_count} |"
+        for item in metrics.scenario_metrics
+    )
 
-    Replaces TODO with structured reporting of:
-    - Success/failure breakdown
-    - Retry patterns and effectiveness
-    - Approval flow metrics
-    - Architecture decisions and rationale
-    """
-    report = f"""# Day 08 LangGraph Agent Lab Report
+    return f"""# Day 08 Lab Report
 
-## Executive Summary
+## 1. Team / student
 
-This lab implements a production-style LangGraph workflow for support-ticket handling.
-The graph includes input normalization, keyword-based routing, tool execution, evaluation,
-bounded retry, human approval, dead-letter handling, and markdown reporting.
+- Name: Not provided
+- Repo/commit: `849cca5`
+- Date: `2026-05-11`
 
-The current run shows the graph is stable end-to-end: all sample scenarios completed,
-route accuracy matched the expected outcomes, and the retry / approval paths were exercised.
+## 2. Architecture
 
-## Metrics Overview
+The graph is built as a linear intake-to-classification front end with conditional branches for safe, tool-based, missing-info, risky, and error scenarios. The main path is `START -> intake -> classify`, then routing decides whether the run goes to `answer`, `tool`, `clarify`, `risky_action`, or `retry`.
 
-### Overall Performance
-- **Total scenarios:** {metrics.total_scenarios}
-- **Successful runs:** {metrics.total_scenarios}
-- **Failed runs:** 0 (0.0%)
-- **Average nodes visited:** {metrics.avg_nodes_visited:.2f}
+The risky path adds a human approval gate before any tool/action continues. The tool path always passes through `evaluate` so the graph can decide whether to finish or loop back into retry. Every branch terminates through `finalize -> END`, so the graph remains bounded and gradeable.
 
-### Retry and Recovery
-- **Total retries observed:** {metrics.total_retries}
-- **Approval interrupts observed:** {metrics.total_interrupts}
-- **Dead-letter records written:** 1
+## 3. State schema
 
-### Scenario Highlights
-- Direct-answer routes completed without retry.
-- Tool routes executed and evaluated successfully.
-- Approval gates were exercised on risky scenarios.
-- Retry loops were triggered on transient failures.
-- A dead-letter case was captured for manual review.
+The state uses a lean typed schema with a mix of overwrite and append-only fields. Append-only fields store the trace, while overwrite fields represent the current decision point.
 
-## Architecture Decisions
+| Field | Reducer | Why |
+|---|---|---|
+| messages | append | audit conversation/events |
+| tool_results | append | keep full tool trace for evaluation |
+| errors | append | preserve retry/failure history |
+| events | append | append-only execution log for debugging |
+| route | overwrite | current route only |
+| risk_level | overwrite | current risk classification |
+| attempt | overwrite | current retry counter |
+| approval | overwrite | latest approval decision only |
+| evaluation_result | overwrite | latest tool evaluation result |
+| final_answer | overwrite | only latest answer matters |
+| pending_question | overwrite | only current clarification is needed |
 
-### 1. State Schema
-- **Append-only fields:** `messages`, `tool_results`, `errors`, `events`
-- **Mutable fields:** `route`, `risk_level`, `attempt`, `approval`, `evaluation_result`
-- **Rationale:** append-only audit data keeps the graph explainable, while mutable fields let the workflow progress through routing and recovery states.
+## 4. Scenario results
 
-### 2. Routing Policy
-- **RISKY:** refund, delete, send, cancel-like actions require approval
-- **TOOL:** status, order, lookup, check-style queries go through tool execution
-- **MISSING_INFO:** short or ambiguous queries fall back to clarification
-- **ERROR:** timeout / fail / error-style queries enter the retry path
-- **SIMPLE:** everything else goes straight to answer
+The table below is taken from `outputs/metrics.json`.
 
-The route ordering matters: risky checks run first, then tool, then missing-info, then error, then default safe answer.
+| Scenario | Expected route | Actual route | Success | Retries | Interrupts |
+|---|---|---|---:|---:|---:|
+{scenario_rows}
 
-### 3. Retry Strategy
-- **Bounded retries:** `max_attempts=3`
-- **Backoff:** exponential backoff metadata is recorded as `(2 ^ attempt) * 100ms`
-- **Loop shape:** `tool -> evaluate -> retry -> tool`
-- **Exit path:** once attempts exceed the limit, the flow goes to `dead_letter -> finalize -> END`
+Summary metrics:
 
-### 4. Approval Flow
-- **Human-in-the-loop:** `LANGGRAPH_INTERRUPT=true` enables real `interrupt()` support
-- **Default mode:** mock approval keeps tests and CI offline-friendly
-- **Reject behavior:** rejected actions route back to clarification rather than continuing blindly
+- Total scenarios: {metrics.total_scenarios}
+- Success rate: {metrics.success_rate:.1%}
+- Average nodes visited: {metrics.avg_nodes_visited:.2f}
+- Total retries: {metrics.total_retries}
+- Total interrupts: {metrics.total_interrupts}
+- Resume success: {str(metrics.resume_success).lower()}
 
-### 5. Persistence and Recovery
-- Memory checkpointer is used for local runs.
-- Dead-letter records are persisted to `outputs/dead_letters/` for manual review.
-- Each run uses a `thread_id`, which makes the trace and replay behavior inspectable.
+## 5. Failure analysis
 
-## Failure Modes and Mitigation
+1. Retry or tool failure: transient tool errors are detected in `evaluate_node` and routed to `retry` until `max_attempts` is reached. In the sample run, the error scenarios retried before success or dead-letter handling.
+2. Risky action without approval: risky queries such as refund/delete go through `risky_action -> approval` before any tool execution. If approval is rejected, the flow returns to clarification instead of silently continuing.
 
-| Mode | Trigger | Mitigation | Status |
-|------|---------|-----------|--------|
-| Transient tool error | Tool returns `TRANSIENT_ERROR` or `ERROR` | Retry with backoff | Implemented |
-| Max retries exceeded | `attempt >= max_attempts` | Route to dead-letter | Implemented |
-| Unknown route | Invalid or unexpected route value | Safe fallback to `answer` | Implemented |
-| Approval rejected | `approved=false` | Request clarification | Implemented |
-| Empty tool result | No tool output available | Retry evaluation | Implemented |
+## 6. Persistence / recovery evidence
 
-The important distinction is that there were no scenario-level failures in the final run, but the workflow still demonstrated operational failures internally: retry attempts, approval gating, and a captured dead-letter case.
+The run uses a memory checkpointer by default, and each scenario is assigned a unique `thread_id` in `initial_state`. That makes the graph traceable run by run. In addition, dead-letter records are persisted to `outputs/dead_letters/` as JSON files so failed cases can be inspected later.
 
-## Improvements
+## 7. Extension work
 
-1. **LLM-as-judge:** Replace rule-based evaluation with semantic validation for more realistic tool checking.
-2. **Retry hardening:** Add jitter, circuit breaking, and richer failure classification.
-3. **Persistence upgrade:** Persist dead-letter records to SQLite or Postgres for better analysis.
-4. **Observability:** Add tracing and structured logs for node-level debugging.
-5. **Answer quality:** Ground final answers more explicitly in tool output and approval context.
+I completed dead-letter persistence and richer markdown reporting. The lab also supports an interactive approval path through `LANGGRAPH_INTERRUPT=true`, and the CLI writes both metrics and report output in a repeatable way.
 
-## Implementation Checklist
+## 8. Improvement plan
 
-- [x] Intake normalization and PII checks
-- [x] Routing policy with priority order
-- [x] Idempotent tool execution
-- [x] Structured tool outputs
-- [x] Rule-based evaluation loop
-- [x] Bounded retry with exponential backoff
-- [x] Risk detection and approval flow
-- [x] Clarification path for missing information
-- [x] Unknown-route fallback
-- [x] Dead-letter persistence
-- [x] Markdown report generation
-
-## Run Commands
-
-```bash
-make install
-make test
-make run-scenarios
-make grade-local
-```
-
-Direct Python equivalent:
-
-```bash
-python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics.json
-python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics.json
-```
-
-Outputs to inspect:
-- `outputs/metrics.json`
-- `reports/lab_report.md`
-- `outputs/dead_letters/`
-
----
-
-Report generated for Day 08 LangGraph lab. The implementation is complete and ready for grading.
+If I had one more day, I would productionize the evaluation step first by replacing the rule-based checker with an LLM-as-judge or structured validator. After that, I would add stronger persistence for dead-letter records, better tracing, and a more explicit answer-grounding step so final responses always cite tool output and approval context.
 """
     return report
 
