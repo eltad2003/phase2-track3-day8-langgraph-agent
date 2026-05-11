@@ -12,6 +12,46 @@ The graph is built as a linear intake-to-classification front end with condition
 
 The risky path adds a human approval gate before any tool/action continues. The tool path always passes through `evaluate` so the graph can decide whether to finish or loop back into retry. Every branch terminates through `finalize -> END`, so the graph remains bounded and gradeable.
 
+### Graph Flow Diagram
+
+```mermaid
+graph TD
+    START([START]) --> intake[intake]
+    intake --> classify{classify}
+    
+    classify -->|SIMPLE| answer[answer]
+    classify -->|TOOL| tool[tool]
+    classify -->|MISSING_INFO| clarify[clarify]
+    classify -->|RISKY| risky_action[risky_action]
+    classify -->|ERROR| retry_node[retry]
+    
+    tool --> evaluate{evaluate}
+    evaluate -->|success| answer
+    evaluate -->|needs_retry| retry_node
+    
+    retry_node --> route_retry{route_after_retry}
+    route_retry -->|attempt < max| tool
+    route_retry -->|exhausted| dead_letter[dead_letter]
+    
+    risky_action --> approval[approval]
+    approval --> route_approval{route_after_approval}
+    route_approval -->|approved| tool
+    route_approval -->|rejected| clarify
+    
+    answer --> finalize[finalize]
+    clarify --> finalize
+    dead_letter --> finalize
+    finalize --> END([END])
+```
+
+Key features:
+
+- **Route-based branching:** `classify_node` determines path based on keywords
+- **Retry loop:** `tool → evaluate → retry → tool` with bounded attempts
+- **Approval gate:** risky actions require human approval before execution
+- **Dead-letter path:** unresolvable failures are logged for manual review
+- **Unified exit:** all paths converge at `finalize → END` for graceful termination
+
 ## 3. State schema
 
 The state uses a lean typed schema with a mix of overwrite and append-only fields. Append-only fields store the trace, while overwrite fields represent the current decision point.
