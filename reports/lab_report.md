@@ -1,32 +1,56 @@
-"""Report generation helper."""
-
-from __future__ import annotations
-
-from pathlib import Path
-
-from .metrics import MetricsReport
-
-
-def render_report_stub(metrics: MetricsReport) -> str:
-    """Return a report that follows the lab template exactly."""
-    scenario_rows = "\n".join(
-        f"| {item.scenario_id} | {item.expected_route} | {item.actual_route or ''} | {str(item.success).lower()} | {item.retry_count} | {item.interrupt_count} |"
-        for item in metrics.scenario_metrics
-    )
-
-    return f"""# Day 08 Lab Report
+# Day 08 Lab Report
 
 ## 1. Team / student
 
-- Name: Not provided
-- Repo/commit: `849cca5`
-- Date: `2026-05-11`
+- Name: Lê Hoàng Đạt - 2A202600377
+- Repo/commit: `https://github.com/eltad2003/phase2-track3-day8-langgraph-agent/commits/main/`
+- Date: `11/05/2026`
 
 ## 2. Architecture
 
 The graph is built as a linear intake-to-classification front end with conditional branches for safe, tool-based, missing-info, risky, and error scenarios. The main path is `START -> intake -> classify`, then routing decides whether the run goes to `answer`, `tool`, `clarify`, `risky_action`, or `retry`.
 
 The risky path adds a human approval gate before any tool/action continues. The tool path always passes through `evaluate` so the graph can decide whether to finish or loop back into retry. Every branch terminates through `finalize -> END`, so the graph remains bounded and gradeable.
+
+### Graph Flow Diagram
+
+```mermaid
+graph TD
+    START([START]) --> intake[intake]
+    intake --> classify{classify}
+    
+    classify -->|SIMPLE| answer[answer]
+    classify -->|TOOL| tool[tool]
+    classify -->|MISSING_INFO| clarify[clarify]
+    classify -->|RISKY| risky_action[risky_action]
+    classify -->|ERROR| retry_node[retry]
+    
+    tool --> evaluate{evaluate}
+    evaluate -->|success| answer
+    evaluate -->|needs_retry| retry_node
+    
+    retry_node --> route_retry{route_after_retry}
+    route_retry -->|attempt < max| tool
+    route_retry -->|exhausted| dead_letter[dead_letter]
+    
+    risky_action --> approval[approval]
+    approval --> route_approval{route_after_approval}
+    route_approval -->|approved| tool
+    route_approval -->|rejected| clarify
+    
+    answer --> finalize[finalize]
+    clarify --> finalize
+    dead_letter --> finalize
+    finalize --> END([END])
+```
+
+Key features:
+
+- **Route-based branching:** `classify_node` determines path based on keywords
+- **Retry loop:** `tool → evaluate → retry → tool` with bounded attempts
+- **Approval gate:** risky actions require human approval before execution
+- **Dead-letter path:** unresolvable failures are logged for manual review
+- **Unified exit:** all paths converge at `finalize → END` for graceful termination
 
 ## 3. State schema
 
@@ -52,16 +76,22 @@ The table below is taken from `outputs/metrics.json`.
 
 | Scenario | Expected route | Actual route | Success | Retries | Interrupts |
 |---|---|---|---:|---:|---:|
-{scenario_rows}
+| S01_simple | simple | simple | true | 0 | 0 |
+| S02_tool | tool | tool | true | 0 | 0 |
+| S03_missing | missing_info | missing_info | true | 0 | 0 |
+| S04_risky | risky | risky | true | 0 | 1 |
+| S05_error | error | error | true | 2 | 0 |
+| S06_delete | risky | risky | true | 0 | 1 |
+| S07_dead_letter | error | error | true | 1 | 0 |
 
 Summary metrics:
 
-- Total scenarios: {metrics.total_scenarios}
-- Success rate: {metrics.success_rate:.1%}
-- Average nodes visited: {metrics.avg_nodes_visited:.2f}
-- Total retries: {metrics.total_retries}
-- Total interrupts: {metrics.total_interrupts}
-- Resume success: {str(metrics.resume_success).lower()}
+- Total scenarios: 7
+- Success rate: 100.0%
+- Average nodes visited: 6.43
+- Total retries: 3
+- Total interrupts: 2
+- Resume success: false
 
 ## 5. Failure analysis
 
@@ -79,11 +109,3 @@ I completed dead-letter persistence and richer markdown reporting. The lab also 
 ## 8. Improvement plan
 
 If I had one more day, I would productionize the evaluation step first by replacing the rule-based checker with an LLM-as-judge or structured validator. After that, I would add stronger persistence for dead-letter records, better tracing, and a more explicit answer-grounding step so final responses always cite tool output and approval context.
-"""
-    return report
-
-
-def write_report(metrics: MetricsReport, output_path: str | Path) -> None:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(render_report_stub(metrics), encoding="utf-8")
