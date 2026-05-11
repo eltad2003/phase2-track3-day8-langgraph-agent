@@ -18,7 +18,7 @@ def intake_node(state: AgentState) -> dict:
     normalized_query = " ".join(query.split())
     # Placeholder for PII checking
     has_pii = "ssn" in normalized_query.lower()
-    
+
     return {
         "query": normalized_query,
         "messages": [f"intake:{normalized_query[:40]}"],
@@ -42,7 +42,7 @@ def classify_node(state: AgentState) -> dict:
     route = Route.SIMPLE
     risk_level = "low"
     confidence = 0.7  # Default confidence for simple route
-    
+
     # High-risk actions require approval
     if any(kw in query for kw in ["refund", "delete", "cancel", "send money"]):
         route = Route.RISKY
@@ -63,7 +63,7 @@ def classify_node(state: AgentState) -> dict:
         route = Route.ERROR
         risk_level = "medium"
         confidence = 0.8
-    
+
     return {
         "route": route.value,
         "risk_level": risk_level,
@@ -92,7 +92,7 @@ def tool_node(state: AgentState) -> dict:
     """
     attempt = int(state.get("attempt", 0))
     scenario_id = state.get('scenario_id', 'unknown')
-    
+
     # Idempotent: check if tool already executed successfully
     tool_results = state.get("tool_results", [])
     if tool_results and "SUCCESS" in tool_results[-1]:
@@ -100,13 +100,13 @@ def tool_node(state: AgentState) -> dict:
             "tool_results": tool_results,  # Return existing result, no side effects
             "events": [make_event("tool", "skipped", f"idempotent: already executed, attempt={attempt}")],
         }
-    
+
     # Simulate transient failures for error-route scenarios
     if state.get("route") == Route.ERROR.value and attempt < 2:
         result = f"TRANSIENT_ERROR: scenario={scenario_id}, attempt={attempt}, retry_needed=true"
     else:
         result = f"SUCCESS: tool_execution_completed, scenario={scenario_id}, data_fetched=true"
-    
+
     return {
         "tool_results": [result],
         "events": [make_event("tool", "completed", f"tool executed at attempt {attempt}")],
@@ -122,7 +122,7 @@ def risky_action_node(state: AgentState) -> dict:
     query = state.get("query", "")
     risk_level = state.get("risk_level", "unknown")
     scenario_id = state.get("scenario_id", "unknown")
-    
+
     # Construct a detailed proposed action with evidence
     proposed_action = (
         f"Scenario: {scenario_id}\n"
@@ -131,7 +131,7 @@ def risky_action_node(state: AgentState) -> dict:
         f"Action: Execute requested operation\n"
         f"Mitigation: Reviewer confirmation required before proceeding."
     )
-    
+
     return {
         "proposed_action": proposed_action,
         "events": [make_event("risky_action", "pending_approval", f"risk_level={risk_level}, approval required")],
@@ -160,12 +160,13 @@ def approval_node(state: AgentState) -> dict:
             decision = ApprovalDecision(approved=bool(value))
     else:
         # Mock approval; in production, this would block until human review
-        decision = ApprovalDecision(approved=True, comment="mock approval for lab")
-    
+        decision = ApprovalDecision(
+            approved=True, comment="mock approval for lab")
+
     event_msg = f"approved={decision.approved}, reviewer={decision.reviewer}"
     if not decision.approved:
         event_msg += f", reason={decision.comment}"
-    
+
     return {
         "approval": decision.model_dump(),
         "events": [make_event("approval", "completed", event_msg)],
@@ -213,7 +214,7 @@ def evaluate_node(state: AgentState) -> dict:
     """
     tool_results = state.get("tool_results", [])
     latest = tool_results[-1] if tool_results else ""
-    
+
     # Rule-based evaluation
     if not latest:
         return {
